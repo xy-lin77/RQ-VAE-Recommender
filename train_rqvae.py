@@ -1,4 +1,5 @@
 import gin
+import os
 
 from accelerate import Accelerator
 from data.movie_lens import MovieLensMovieData
@@ -29,7 +30,10 @@ def train(
     vae_embed_dim=32,
     vae_hidden_dim=32,
     vae_codebook_size=32,
-    vae_n_layers=3
+    vae_n_layers=3,
+    checkpoint_dir="checkpoints",
+    inference_checkpoint_dir="inference_checkpoints", 
+    save_interval=10000
 ):
     accelerator = Accelerator(
         split_batches=split_batches,
@@ -70,6 +74,9 @@ def train(
         step_size=6000
     )
 
+    os.makedirs(checkpoint_dir, exist_ok=True)
+    os.makedirs(inference_checkpoint_dir, exist_ok=True)
+
     with tqdm(initial=0, total=iterations,
               disable=not accelerator.is_main_process) as pbar:
         for iter in range(iterations):
@@ -98,6 +105,39 @@ def train(
 
             optimizer.step()
             scheduler.step()
+
+            if (iter + 1) % save_interval == 0 or (iter + 1) == iterations:
+                if accelerator.is_main_process:
+                    checkpoint_path = os.path.join(checkpoint_dir, f"model_iter_{iter+1}.pt")
+                    accelerator.save(
+                        {
+                            "model_state_dict": model.state_dict(),
+                            "optimizer_state_dict": optimizer.state_dict(),
+                            "scheduler_state_dict": scheduler.state_dict(),
+                            "iteration": iter + 1,
+                            "temp_scheduler_state": temp_scheduler.__dict__
+                        },
+                        checkpoint_path
+                    )
+                    print(f"Checkpoint saved: {checkpoint_path}")
+
+                    inference_checkpoint_path = os.path.join(
+                        inference_checkpoint_dir, f"inference_model_iter_{iter+1}.pt"
+                    )
+                    accelerator.save(
+                        {
+                            "model_state_dict": model.state_dict(),
+                            "config": {
+                                "vae_input_dim": vae_input_dim,
+                                "vae_embed_dim": vae_embed_dim,
+                                "vae_hidden_dim": vae_hidden_dim,
+                                "vae_codebook_size": vae_codebook_size,
+                                "vae_n_layers": vae_n_layers,
+                            },
+                        },
+                        inference_checkpoint_path
+                    )
+                    print(f"Inference checkpoint saved: {inference_checkpoint_path}")
 
             accelerator.wait_for_everyone()
             pbar.update(1)
